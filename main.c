@@ -349,6 +349,7 @@ static void Scheduling_Task( void *pvParameters ){
 			}
 		}//released tasks
 
+		//completed tasks
 		uint32_t completed_task_id;
 		if(xQueueRecieve(xQueue_completed, completed_task_id, pdMS_TO_TICKS(500))){
 			dd_task_list current_task = active_list;
@@ -362,9 +363,11 @@ static void Scheduling_Task( void *pvParameters ){
 
 			while(1){
 				
+				//loop through task list until completed found
 				if (current_task.task.task_id == completed_task_id){
 					current_task.task.completion_time = xTaskGetTickCount();
 
+					//should be first one
 					if(prev == NULL){
 						active_list = active_list.next_task;
 					}else{
@@ -382,16 +385,51 @@ static void Scheduling_Task( void *pvParameters ){
 
 						last_task.next_task = current_task;
 					}
-
 					break;
 				}
 
 				prev = current_task;
 				current_task = current_task.next_task;
+			}
+		}//completed tasks
 
+		//overdue checking
+		dd_task_list current_task = active_list;
+		uint32_t time = xTaskGetTickCount();
 
+		dd_task_list task_to_overdue = NULL;
+
+		if (active_list.task.absolute_deadline < time){
+			task_to_overdue = {active_list.task, NULL}
+			active_list = active_list.next_task;
+		}else{
+			while(1) {
+				dd_task_list checking = current_task.next_task;
+				if(checking.task.absolute_deadline < time){
+					task_to_overdue = {checking.task, NULL}
+					current_task.next_task = checking.next_task;
+					break;
+				}
 			}
 		}
+
+		if(overdue_list == NULL){
+			overdue_list = task_to_overdue;
+		}else{
+			current_task = overdue_list;
+			while(1) {
+				if (current_task.next_task == NULL){
+					current_task.next_task = task_to_overdue;
+					break;
+				}
+				current_task = current_task.next_task;
+			}
+		}
+
+		//overdue checking
+
+
+		
 	}
 }
 
