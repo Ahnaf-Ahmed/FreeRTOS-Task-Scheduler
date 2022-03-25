@@ -153,11 +153,6 @@ functionality.
 /*-----------------------------------------------------------*/
 #define mainQUEUE_LENGTH 7
 
-#define amber  	1
-#define green  	0
-#define red  	2
-#define blue  	3
-
 #define amber_led	LED3
 #define green_led	LED4
 #define red_led		LED5
@@ -196,7 +191,7 @@ TaskHandle_t xTask3Handle;
 
 enum task_type {PERIODIC, APERIODIC};
 
-struct dd_task {
+typedef struct dd_task {
 	TaskHandle_t t_handle;
 	task_type type;
 	uint32_t task_id;
@@ -205,9 +200,9 @@ struct dd_task {
 	uint32_t completion_time;
 };
 
-struct dd_task_list {//need task list for active, completed, and overdue tasks
+typedef struct dd_task_list {//need task list for active, completed, and overdue tasks
 	dd_task task;
-	struct dd_task_list *next_task;
+	dd_task_list *next_task;
 };
 
 /**
@@ -216,7 +211,7 @@ struct dd_task_list {//need task list for active, completed, and overdue tasks
  * for the DDS to receive
  */
 void create_dd_task(TaskHandle_t t_handle, task_type type, uint32_t task_id, uint32_t absolute_deadline){
-	struct dd_task d = {
+	dd_task d = {
 			.t_handle = t_handle,
 			.type = type,
 			.task_id = task_id,
@@ -317,39 +312,49 @@ static void Idle_Task( void *pvParameters ){
 }
 
 static void Scheduling_Task( void *pvParameters ){
-	struct dd_task_list active_list;
-	struct dd_task_list completed_list;
-	struct dd_task_list overdue_list;
+	dd_task_list active_list;
+	dd_task_list completed_list;
+	dd_task_list overdue_list;
+
 	while(1){
 		dd_task released_task;
 		if(xQueueRecieve(xQueue_released, released_task, pdMS_TO_TICKS(500))){
-			struct dd_task_list add_to_active_list = {released_task, NULL};
+			dd_task_list add_to_active_list = {released_task, NULL};
+
+			//if no tasks set to released task
 			if(active_list == NULL){
 				active_list = add_to_active_list;
-				break;
-			}
-			// traverse list and check deadlines
-			struct dd_task_list current_task = active_list;
-			while(1){
-				struct dd_task_list next_task = current_task.next_task;
+			}else{	// traverse list and check deadlines
 
-				// check if reached end of list
-				if(next_task == NULL){
-					current_task.next_task = add_to_active_list;
-					break;
-				}
-				// compare deadline if the new task with surrounding tasks at this point in the linked list
-				if(current_task.task.absolute_deadline <= released_task.absolute_deadline && next_task.task.absolute_deadline >= released_task.absolute_deadline){
-					add_to_active_list.next_task = next_task;
-					current_task.next_task = add_to_active_list;
-					break;
-				}
-				current_task = current_task.next_task;
-			}
-			// TODO how to get the active_list to point to the start of the linked list after update?
-			active_list = current_task;
+				dd_task_list current_task = active_list;
 
-		}
+				//insert new task at head if it's earlier
+				if (released_task.absolute_deadline < current_task.task.absolute_deadline) {
+					add_to_active_list.next_task = current_task;
+					active_list = add_to_active_list;
+				}else{
+					while(1){
+						dd_task_list next_task = current_task.next_task;
+
+						// insert new task after current task if earlier than next task
+						if(released_task.absolute_deadline < next_task.task.absolute_deadline ){
+							add_to_active_list.next_task = next_task;
+							current_task.next_task = add_to_active_list;
+							break;
+						}
+
+						// check if reached end of list
+						if(next_task == NULL){
+							current_task.next_task = add_to_active_list;
+							break;
+						}
+						current_task = current_task.next_task;
+					}//end traversal
+				}
+			}
+		}//released tasks
+
+		//check other things
 	}
 }
 
