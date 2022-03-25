@@ -153,11 +153,6 @@ functionality.
 /*-----------------------------------------------------------*/
 #define mainQUEUE_LENGTH 7
 
-#define amber_led	LED3
-#define green_led	LED4
-#define red_led		LED5
-#define blue_led	LED6
-
 #define idle_task_priority	3
 #define default_priority 5
 
@@ -354,7 +349,49 @@ static void Scheduling_Task( void *pvParameters ){
 			}
 		}//released tasks
 
-		//check other things
+		uint32_t completed_task_id;
+		if(xQueueRecieve(xQueue_completed, completed_task_id, pdMS_TO_TICKS(500))){
+			dd_task_list current_task = active_list;
+			
+			if(active_list == NULL){
+				//ERROR STATE BAD
+				break;
+			}
+
+			dd_task_list prev;
+
+			while(1){
+				
+				if (current_task.task.task_id == completed_task_id){
+					current_task.task.completion_time = xTaskGetTickCount();
+
+					if(prev == NULL){
+						active_list = active_list.next_task;
+					}else{
+						prev.next_task = current_task.next_task
+					}
+
+					if(completed_list == NULL){
+						completed_list = current_task;
+					}else{
+						dd_task_list last_task = completed_list;
+
+						while (last_task.next_task != NULL){
+							last_task = last_task.next_task;
+						}
+
+						last_task.next_task = current_task;
+					}
+
+					break;
+				}
+
+				prev = current_task;
+				current_task = current_task.next_task;
+
+
+			}
+		}
 	}
 }
 
