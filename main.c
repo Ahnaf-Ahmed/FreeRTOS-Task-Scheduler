@@ -155,6 +155,7 @@ functionality.
 
 #define idle_task_priority	3
 #define default_priority 5
+#define running_priority 2
 
 //test plans
 #define task_1_Period 95
@@ -312,6 +313,8 @@ static void Scheduling_Task( void *pvParameters ){
 	dd_task_list overdue_list;
 
 	while(1){
+
+		//release task
 		dd_task released_task;
 		if(xQueueRecieve(xQueue_released, released_task, pdMS_TO_TICKS(500))){
 			dd_task_list add_to_active_list = {released_task, NULL};
@@ -325,6 +328,10 @@ static void Scheduling_Task( void *pvParameters ){
 
 				//insert new task at head if it's earlier
 				if (released_task.absolute_deadline < current_task.task.absolute_deadline) {
+					
+					vTaskPrioritySet(current_task.task.t_handle, default_priority);
+					vTaskPrioritySet(released_task.t_handle, running_priority);
+
 					add_to_active_list.next_task = current_task;
 					active_list = add_to_active_list;
 				}else{
@@ -427,8 +434,6 @@ static void Scheduling_Task( void *pvParameters ){
 		}
 
 		//overdue checking
-
-
 		
 	}
 }
