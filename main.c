@@ -322,6 +322,7 @@ static void Scheduling_Task( void *pvParameters ){
 			//if no tasks set to released task
 			if(active_list == NULL){
 				active_list = add_to_active_list;
+				vTaskPrioritySet(released_task.t_handle, running_priority);
 			}else{	// traverse list and check deadlines
 
 				dd_task_list current_task = active_list;
@@ -373,13 +374,18 @@ static void Scheduling_Task( void *pvParameters ){
 				//loop through task list until completed found
 				if (current_task.task.task_id == completed_task_id){
 					current_task.task.completion_time = xTaskGetTickCount();
+					
+					vTaskPrioritySet(current_task.task.t_handle, default_priority);
 
 					//should be first one
 					if(prev == NULL){
 						active_list = active_list.next_task;
 					}else{
-						prev.next_task = current_task.next_task
+						//set previous items next task to be the one after this one
+						prev.next_task = current_task.next_task;
 					}
+
+					vTaskPrioritySet(active_list.task.t_handle, running_priority);
 
 					if(completed_list == NULL){
 						completed_list = current_task;
@@ -408,7 +414,9 @@ static void Scheduling_Task( void *pvParameters ){
 
 		if (active_list.task.absolute_deadline < time){
 			task_to_overdue = {active_list.task, NULL}
+			vTaskPrioritySet(active_list.task.t_handle, default_priority);
 			active_list = active_list.next_task;
+			vTaskPrioritySet(active_list.task.t_handle, running_priority);
 		}else{
 			while(1) {
 				dd_task_list checking = current_task.next_task;
