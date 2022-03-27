@@ -308,9 +308,9 @@ static void Idle_Task( void *pvParameters ){
 }
 
 static void Scheduling_Task( void *pvParameters ){
-	dd_task_list active_list;
-	dd_task_list completed_list;
-	dd_task_list overdue_list;
+	dd_task_list * active_list = NULL;
+	dd_task_list * completed_list = NULL;
+	dd_task_list * overdue_list = NULL;
 
 	while(1){
 
@@ -321,37 +321,41 @@ static void Scheduling_Task( void *pvParameters ){
 
 			//if no tasks set to released task
 			if(active_list == NULL){
+
 				active_list = add_to_active_list;
 				vTaskPrioritySet(released_task.t_handle, running_priority);
+
 			}else{	// traverse list and check deadlines
 
-				dd_task_list current_task = active_list;
+				// get the address of the start of the linked list
+				dd_task_list * current_task = active_list;
 
 				//insert new task at head if it's earlier
-				if (released_task.absolute_deadline < current_task.task.absolute_deadline) {
-					
-					vTaskPrioritySet(current_task.task.t_handle, default_priority);
-					vTaskPrioritySet(released_task.t_handle, running_priority);
+				if (released_task->absolute_deadline < current_task->task->absolute_deadline) {
 
-					add_to_active_list.next_task = current_task;
+					vTaskPrioritySet(current_task->task->t_handle, default_priority);
+					vTaskPrioritySet(released_task->t_handle, running_priority);
+
+					add_to_active_list->next_task = current_task;
 					active_list = add_to_active_list;
 				}else{
 					while(1){
-						dd_task_list next_task = current_task.next_task;
-
-						// insert new task after current task if earlier than next task
-						if(released_task.absolute_deadline < next_task.task.absolute_deadline ){
-							add_to_active_list.next_task = next_task;
-							current_task.next_task = add_to_active_list;
-							break;
-						}
+						dd_task_list * next_task = current_task->next_task;
 
 						// check if reached end of list
 						if(next_task == NULL){
-							current_task.next_task = add_to_active_list;
+							current_task->next_task = add_to_active_list;
 							break;
 						}
-						current_task = current_task.next_task;
+
+						// insert new task after current task if earlier than next task
+						if(released_task->absolute_deadline < next_task->task->absolute_deadline ){
+							add_to_active_list->next_task = next_task;
+							current_task->next_task = add_to_active_list;
+							break;
+						}
+
+						current_task = current_task->next_task;
 					}//end traversal
 				}
 			}
@@ -361,7 +365,7 @@ static void Scheduling_Task( void *pvParameters ){
 		uint32_t completed_task_id;
 		if(xQueueRecieve(xQueue_completed, completed_task_id, pdMS_TO_TICKS(500))){
 			dd_task_list current_task = active_list;
-			
+
 			if(active_list == NULL){
 				//ERROR STATE BAD
 				break;
@@ -370,11 +374,11 @@ static void Scheduling_Task( void *pvParameters ){
 			dd_task_list prev;
 
 			while(1){
-				
+
 				//loop through task list until completed found
 				if (current_task.task.task_id == completed_task_id){
 					current_task.task.completion_time = xTaskGetTickCount();
-					
+
 					vTaskPrioritySet(current_task.task.t_handle, default_priority);
 
 					//should be first one
@@ -413,7 +417,7 @@ static void Scheduling_Task( void *pvParameters ){
 		dd_task_list task_to_overdue = NULL;
 
 		if (active_list.task.absolute_deadline < time){
-			task_to_overdue = {active_list.task, NULL}
+			task_to_overdue = {active_list.task, NULL};
 			vTaskPrioritySet(active_list.task.t_handle, default_priority);
 			active_list = active_list.next_task;
 			vTaskPrioritySet(active_list.task.t_handle, running_priority);
@@ -421,7 +425,7 @@ static void Scheduling_Task( void *pvParameters ){
 			while(1) {
 				dd_task_list checking = current_task.next_task;
 				if(checking.task.absolute_deadline < time){
-					task_to_overdue = {checking.task, NULL}
+					task_to_overdue = {checking.task, NULL};
 					current_task.next_task = checking.next_task;
 					break;
 				}
@@ -442,7 +446,7 @@ static void Scheduling_Task( void *pvParameters ){
 		}
 
 		//overdue checking
-		
+
 	}
 }
 
@@ -579,4 +583,3 @@ static void prvSetupHardware( void )
 	/* TODO: Setup the clocks, etc. here, if they were not configured before
 	main() was called. */
 }
-
