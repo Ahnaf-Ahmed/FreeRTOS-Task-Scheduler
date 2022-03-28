@@ -228,6 +228,7 @@ struct dd_task_list {//need task list for active, completed, and overdue tasks
  * for the DDS to receive
  */
 void create_dd_task(TaskHandle_t t_handle, task_type type, uint32_t task_id, uint32_t absolute_deadline) {
+	msg_type cmd = RELEASED;
 	dd_task d = {
 			.t_handle = t_handle,
 			.type = type,
@@ -235,27 +236,31 @@ void create_dd_task(TaskHandle_t t_handle, task_type type, uint32_t task_id, uin
 			.absolute_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(absolute_deadline)
 	};
 	xQueueSend(xQueue_released, &d, pdMS_TO_TICKS(500));
+	xQueueSend(xQueue_command, &cmd, pdMS_TO_TICKS(500));
+
 
 }
 
 void delete_dd_task(uint32_t task_id) {
+	msg_type cmd = COMPLETED;
 	xQueueSend(xQueue_completed, &task_id, pdMS_TO_TICKS(500));
+	xQueueSend(xQueue_command, &cmd, pdMS_TO_TICKS(500));
 }
 
 //TODO: am I passing the active_list into the xQueueReceive correctly??
 //		check for complete and overdue methods as well
 dd_task_list** get_active_dd_task_list() {
 	dd_task_list * active_list;
-	if (xQueueReceive(xQueue_task_lists, active_list, pdMS_TO_TICKS(500)) {
-		return active_list;
+	if (xQueueReceive(xQueue_task_lists, &active_list, pdMS_TO_TICKS(500)) {
+		return &active_list;
 	}
 	return NULL;
 }
 
 dd_task_list** get_complete_dd_task_list() {
 	dd_task_list * completed_list;
-	if (xQueueReceive(xQueue_task_lists, completed_list, pdMS_TO_TICKS(500)) {
-		return active_list;
+	if (xQueueReceive(xQueue_task_lists, &completed_list, pdMS_TO_TICKS(500)) {
+		return &completed_list;
 	}
 	return NULL;
 }
@@ -263,7 +268,7 @@ dd_task_list** get_complete_dd_task_list() {
 dd_task_list** get_overdue_dd_task_list() {
 	dd_task_list * overdue_list;
 	if (xQueueReceive(xQueue_task_lists, overdue_list, pdMS_TO_TICKS(500)) {
-		return active_list;
+		return &overdue_list;
 	}
 	return NULL;
 }
@@ -358,20 +363,21 @@ static void Idle_Task(void *pvParameters) {
 }
 
 static void Monitor_Task(void *pvParameters) {
+	msg_type cmd = MONITOR;
 	while (1) {
-		if (xQueueSend(xQueue_command, MONITOR, pdMS_TO_TICKS(500)) == pdFALSE) {
+		if (xQueueSend(xQueue_command, &cmd, pdMS_TO_TICKS(500)) == pdFALSE) {
 			// Failed to send enum to command queue
 			printf("Failed to send monitor cmd to command queue");
 			vTaskDelay(1000);
 			continue;
 		}
 		printf("\nPrint active dd tasks: ");
-		dd_task_list * active_list = get_active_dd_task_list();
+		dd_task_list * active_list = *(get_active_dd_task_list());
 		if (active_list != NULL) {
 
 			while (active_list->next_task != NULL) {
 				dd_task curr_task = active_list->task;
-				printf("%d{r: %d, d: %d, c: %d}", curr_task.task_id, curr_task.release_time, curr_task.absolute_deadline, curr_task.completion_time);
+				printf("%d{r: %d, d: %d, c: %d}\n", curr_task.task_id, curr_task.release_time, curr_task.absolute_deadline, curr_task.completion_time);
 				active_list = active_list->next_task;
 			}
 
@@ -382,12 +388,12 @@ static void Monitor_Task(void *pvParameters) {
 
 
 		printf("\nPrint completed dd tasks: ")
-		dd_task_list * completed_list = get_complete_dd_task_list();
+		dd_task_list * completed_list = *(get_complete_dd_task_list());
 		if (completed_list != NULL) {
 
 			while (completed_list->next_task != NULL) {
 				dd_task curr_task = completed_list->task;
-				printf("%d{r: %d, d: %d, c: %d}", curr_task.task_id, curr_task.release_time, curr_task.absolute_deadline, curr_task.completion_time);
+				printf("%d{r: %d, d: %d, c: %d}\n", curr_task.task_id, curr_task.release_time, curr_task.absolute_deadline, curr_task.completion_time);
 				completed_list = completed_list->next_task;
 			}
 
@@ -397,12 +403,12 @@ static void Monitor_Task(void *pvParameters) {
 		}
 
 		printf("\nPrint overdue dd tasks: ")
-		dd_task_list * overdue_list = get_overdue_dd_task_list();
+		dd_task_list * overdue_list = *(get_overdue_dd_task_list());
 		if (overdue_list != NULL) {
 
 			while (overdue_list->next_task != NULL) {
 				dd_task curr_task = overdue_list->task;
-				printf("%d{r: %d, d: %d, c: %d}", curr_task.task_id, curr_task.release_time, curr_task.absolute_deadline, curr_task.completion_time);
+				printf("%d{r: %d, d: %d, c: %d}\n", curr_task.task_id, curr_task.release_time, curr_task.absolute_deadline, curr_task.completion_time);
 				overdue_list = overdue_list->next_task;
 			}
 
@@ -533,19 +539,19 @@ static void Scheduling_Task(void *pvParameters) {
 			}//completed tasks
 			break;
 		case MONITOR:
-			if ((xQueue_task_lists, active_list, pdMS_TO_TICKS(500)) == pdFALSE) {
+			if (xQueueSend(xQueue_task_lists, &active_list, pdMS_TO_TICKS(500)) == pdFALSE) {
 				// Failed to send active lists due to queue command queue too full
 				printf("Failed to send active lists\n");
 				break;
 			}
 
-			if ((xQueue_task_lists, completed_list, pdMS_TO_TICKS(500)) == pdFALSE) {
+			if (xQueueSend(xQueue_task_lists, &completed_list, pdMS_TO_TICKS(500)) == pdFALSE) {
 				// Failed to send active lists due to queue command queue too full
 				printf("Failed to send completed lists\n");
 				break;
 			}
 
-			if ((xQueue_task_lists, overdue_list, pdMS_TO_TICKS(500)) == pdFALSE) {
+			if (xQueueSend(xQueue_task_lists, &overdue_list, pdMS_TO_TICKS(500)) == pdFALSE) {
 				// Failed to send active lists due to queue command queue too full
 				printf("Failed to send overdue lists\n");
 				break;
