@@ -251,7 +251,7 @@ void delete_dd_task(uint32_t task_id) {
 //		check for complete and overdue methods as well
 dd_task_list** get_active_dd_task_list() {
 	dd_task_list * active_list;
-	if (xQueueReceive(xQueue_task_lists, &active_list, pdMS_TO_TICKS(500)) {
+	if (xQueueReceive(xQueue_task_lists, &active_list, pdMS_TO_TICKS(500))) {
 		return &active_list;
 	}
 	return NULL;
@@ -259,7 +259,7 @@ dd_task_list** get_active_dd_task_list() {
 
 dd_task_list** get_complete_dd_task_list() {
 	dd_task_list * completed_list;
-	if (xQueueReceive(xQueue_task_lists, &completed_list, pdMS_TO_TICKS(500)) {
+	if (xQueueReceive(xQueue_task_lists, &completed_list, pdMS_TO_TICKS(500))) {
 		return &completed_list;
 	}
 	return NULL;
@@ -267,7 +267,7 @@ dd_task_list** get_complete_dd_task_list() {
 
 dd_task_list** get_overdue_dd_task_list() {
 	dd_task_list * overdue_list;
-	if (xQueueReceive(xQueue_task_lists, overdue_list, pdMS_TO_TICKS(500)) {
+	if (xQueueReceive(xQueue_task_lists, overdue_list, pdMS_TO_TICKS(500))) {
 		return &overdue_list;
 	}
 	return NULL;
@@ -387,7 +387,7 @@ static void Monitor_Task(void *pvParameters) {
 		}
 
 
-		printf("\nPrint completed dd tasks: ")
+		printf("\nPrint completed dd tasks: ");
 		dd_task_list * completed_list = *(get_complete_dd_task_list());
 		if (completed_list != NULL) {
 
@@ -402,7 +402,7 @@ static void Monitor_Task(void *pvParameters) {
 			printf("xQueue_task_list empty\n");
 		}
 
-		printf("\nPrint overdue dd tasks: ")
+		printf("\nPrint overdue dd tasks: ");
 		dd_task_list * overdue_list = *(get_overdue_dd_task_list());
 		if (overdue_list != NULL) {
 
@@ -436,130 +436,136 @@ static void Scheduling_Task(void *pvParameters) {
 		}
 
 		switch (cmd_message) {
-		case RELEASED:
-			//release task
-			dd_task released_task;
-			if (xQueueReceive(xQueue_released, &released_task, pdMS_TO_TICKS(500))) {
-				dd_task_list add_to_active_list = { released_task, NULL };
+			case RELEASED:
+			{
+				//release task
+				dd_task released_task;
+				if (xQueueReceive(xQueue_released, &released_task, pdMS_TO_TICKS(500))) {
+					dd_task_list add_to_active_list = { released_task, NULL };
 
-				//if no tasks set to released task
-				if (active_list == NULL) {
+					//if no tasks set to released task
+					if (active_list == NULL) {
 
-					active_list = &add_to_active_list;
-					vTaskPrioritySet(released_task.t_handle, running_priority);
-
-				}
-				else {	// traverse list and check deadlines
-
-				   // get the address of the start of the linked list
-					dd_task_list * current_task = active_list;
-
-					//insert new task at head if it's earlier
-					if (released_task.absolute_deadline < current_task->task.absolute_deadline) {
-
-						vTaskPrioritySet(current_task->task.t_handle, default_priority);
+						active_list = &add_to_active_list;
 						vTaskPrioritySet(released_task.t_handle, running_priority);
 
-						add_to_active_list.next_task = current_task;
-						active_list = &add_to_active_list;
 					}
-					else {
-						while (1) {
-							dd_task_list * next_task = current_task->next_task;
+					else {	// traverse list and check deadlines
 
-							// check if reached end of list
-							if (next_task == NULL) {
-								current_task->next_task = &add_to_active_list;
-								break;
-							}
+					   // get the address of the start of the linked list
+						dd_task_list * current_task = active_list;
 
-							// insert new task after current task if earlier than next task
-							if (released_task.absolute_deadline < next_task->task.absolute_deadline) {
-								add_to_active_list.next_task = next_task;
-								current_task->next_task = &add_to_active_list;
-								break;
-							}
+						//insert new task at head if it's earlier
+						if (released_task.absolute_deadline < current_task->task.absolute_deadline) {
 
-							current_task = current_task->next_task;
-						}//end traversal
-					}
-				}
-			}//released tasks
-			break;
-		case COMPLETED:
-			//completed tasks
-			uint32_t completed_task_id;
-			if (xQueueReceive(xQueue_completed, &completed_task_id, pdMS_TO_TICKS(500))) {
-				dd_task_list * current_task = active_list;
+							vTaskPrioritySet(current_task->task.t_handle, default_priority);
+							vTaskPrioritySet(released_task.t_handle, running_priority);
 
-				if (active_list == NULL) {
-					//ERROR STATE BAD
-					break;
-				}
-
-				dd_task_list * prev;
-
-				while (1) {
-
-					//loop through task list until completed found
-					if (current_task->task.task_id == completed_task_id) {
-						current_task->task.completion_time = xTaskGetTickCount();
-
-						vTaskPrioritySet(current_task->task.t_handle, default_priority);
-
-						//should be first one
-						if (prev == NULL) {
-							active_list = active_list->next_task;
+							add_to_active_list.next_task = current_task;
+							active_list = &add_to_active_list;
 						}
 						else {
-							//set previous items next task to be the one after this one
-							prev->next_task = current_task->next_task;
+							while (1) {
+								dd_task_list * next_task = current_task->next_task;
+
+								// check if reached end of list
+								if (next_task == NULL) {
+									current_task->next_task = &add_to_active_list;
+									break;
+								}
+
+								// insert new task after current task if earlier than next task
+								if (released_task.absolute_deadline < next_task->task.absolute_deadline) {
+									add_to_active_list.next_task = next_task;
+									current_task->next_task = &add_to_active_list;
+									break;
+								}
+
+								current_task = current_task->next_task;
+							}//end traversal
 						}
+					}
+				}//released tasks
+				break;
+			}
+			case COMPLETED:
+			{
+				//completed tasks
+				uint32_t completed_task_id;
+				if (xQueueReceive(xQueue_completed, &completed_task_id, pdMS_TO_TICKS(500))) {
+					dd_task_list * current_task = active_list;
 
-						vTaskPrioritySet(active_list->task.t_handle, running_priority);
-
-						if (completed_list == NULL) {
-							completed_list = current_task;
-						}
-						else {
-							dd_task_list * last_task = completed_list;
-
-							while (last_task->next_task != NULL) {
-								last_task = last_task->next_task;
-							}
-
-							last_task->next_task = current_task;
-						}
+					if (active_list == NULL) {
+						//ERROR STATE BAD
 						break;
 					}
 
-					prev = current_task;
-					current_task = current_task->next_task;
+					dd_task_list * prev;
+
+					while (1) {
+
+						//loop through task list until completed found
+						if (current_task->task.task_id == completed_task_id) {
+							current_task->task.completion_time = xTaskGetTickCount();
+
+							vTaskPrioritySet(current_task->task.t_handle, default_priority);
+
+							//should be first one
+							if (prev == NULL) {
+								active_list = active_list->next_task;
+							}
+							else {
+								//set previous items next task to be the one after this one
+								prev->next_task = current_task->next_task;
+							}
+
+							vTaskPrioritySet(active_list->task.t_handle, running_priority);
+
+							if (completed_list == NULL) {
+								completed_list = current_task;
+							}
+							else {
+								dd_task_list * last_task = completed_list;
+
+								while (last_task->next_task != NULL) {
+									last_task = last_task->next_task;
+								}
+
+								last_task->next_task = current_task;
+							}
+							break;
+						}
+
+						prev = current_task;
+						current_task = current_task->next_task;
+					}
+				}//completed tasks
+				break;
+			}
+			case MONITOR:
+			{
+				if (xQueueSend(xQueue_task_lists, &active_list, pdMS_TO_TICKS(500)) == pdFALSE) {
+					// Failed to send active lists due to queue command queue too full
+					printf("Failed to send active lists\n");
+					break;
 				}
-			}//completed tasks
-			break;
-		case MONITOR:
-			if (xQueueSend(xQueue_task_lists, &active_list, pdMS_TO_TICKS(500)) == pdFALSE) {
-				// Failed to send active lists due to queue command queue too full
-				printf("Failed to send active lists\n");
+
+				if (xQueueSend(xQueue_task_lists, &completed_list, pdMS_TO_TICKS(500)) == pdFALSE) {
+					// Failed to send active lists due to queue command queue too full
+					printf("Failed to send completed lists\n");
+					break;
+				}
+
+				if (xQueueSend(xQueue_task_lists, &overdue_list, pdMS_TO_TICKS(500)) == pdFALSE) {
+					// Failed to send active lists due to queue command queue too full
+					printf("Failed to send overdue lists\n");
+					break;
+				}
+
 				break;
 			}
-
-			if (xQueueSend(xQueue_task_lists, &completed_list, pdMS_TO_TICKS(500)) == pdFALSE) {
-				// Failed to send active lists due to queue command queue too full
-				printf("Failed to send completed lists\n");
+			default:
 				break;
-			}
-
-			if (xQueueSend(xQueue_task_lists, &overdue_list, pdMS_TO_TICKS(500)) == pdFALSE) {
-				// Failed to send active lists due to queue command queue too full
-				printf("Failed to send overdue lists\n");
-				break;
-			}
-
-			break;
-		default:
-			break;
 		}
 
 		// Run overdue checking at the end of every command
@@ -569,7 +575,7 @@ static void Scheduling_Task(void *pvParameters) {
 		// Check if head of active list is overdue
 		if (active_list->task.absolute_deadline < time) {
 			task_to_overdue = active_list->task;
-			vTaskPrioritySet(task_to_overdue->task.t_handle, default_priority);
+			vTaskPrioritySet(task_to_overdue.t_handle, default_priority);
 
 			// Remove head from active list
 			active_list = active_list->next_task;
