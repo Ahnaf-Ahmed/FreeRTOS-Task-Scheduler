@@ -152,6 +152,7 @@ functionality.
 
 /*-----------------------------------------------------------*/
 #define mainQUEUE_LENGTH 20
+#define preemptQUEUE_LENGTH 1
 
 #define idle_task_priority	2
 #define default_priority 1
@@ -185,16 +186,21 @@ static void Monitor_Task(void *pvParameters);
 static void Create_Task_One(TimerHandle_t xTimer);
 static void Create_Task_Two(TimerHandle_t xTimer);
 static void Create_Task_Three(TimerHandle_t xTimer);
+static void Adjust_monitor_prio(TimerHandle_t xTimer);
 
 xQueueHandle xQueue_released = 0;
 xQueueHandle xQueue_completed = 0;
 xQueueHandle xQueue_command = 0;
 xQueueHandle xQueue_task_lists = 0;
+xQueueHandle xQueue_preempt_1 = 0;
+xQueueHandle xQueue_preempt_2 = 0;
+xQueueHandle xQueue_preempt_3 = 0;
 
 TaskHandle_t xTaskIdleHandle;
 TaskHandle_t xTask1Handle;
 TaskHandle_t xTask2Handle;
 TaskHandle_t xTask3Handle;
+TaskHandle_t xTaskMonitor;
 
 //dd_task typedef could be combined with struct but task_list includes itself so needs to have a separate typedef
 typedef struct dd_task_list dd_task_list;
@@ -244,20 +250,16 @@ void delete_dd_task(uint32_t task_id) {
 
 //TODO: am I passing the active_list into the xQueueReceive correctly??
 //		check for complete and overdue methods as well
-void get_active_dd_task_list(dd_task_list * active_list) {
-	xQueueReceive(xQueue_task_lists, &active_list, pdMS_TO_TICKS(0));
+void get_active_dd_task_list(dd_task_list ** active_list) {
+	xQueueReceive(xQueue_task_lists, active_list, pdMS_TO_TICKS(0));
 }
 
-void get_complete_dd_task_list(dd_task_list * completed_list) {
-	xQueueReceive(xQueue_task_lists, &completed_list, pdMS_TO_TICKS(0));
+void get_complete_dd_task_list(dd_task_list ** completed_list) {
+	xQueueReceive(xQueue_task_lists, completed_list, pdMS_TO_TICKS(0));
 }
 
-void get_overdue_dd_task_list(dd_task_list * overdue_list) {
-	xQueueReceive(xQueue_task_lists, &overdue_list, pdMS_TO_TICKS(0));
-}
-
-void task_generator() {
-
+void get_overdue_dd_task_list(dd_task_list ** overdue_list) {
+	xQueueReceive(xQueue_task_lists, overdue_list, pdMS_TO_TICKS(0));
 }
 
 int main(void)
@@ -265,6 +267,7 @@ int main(void)
 	xTimerHandle xTimerOne;
 	xTimerHandle xTimerTwo;
 	xTimerHandle xTimerThree;
+	xTimerHandle xTimerMonitor;
 
 
 	srand(time(NULL));
@@ -274,23 +277,30 @@ int main(void)
 	xQueue_completed = xQueueCreate(mainQUEUE_LENGTH, sizeof(uint32_t));
 	xQueue_command = xQueueCreate(mainQUEUE_LENGTH, sizeof(msg_type));
 	xQueue_task_lists = xQueueCreate(mainQUEUE_LENGTH, sizeof(dd_task_list *));
-
+	xQueue_preempt_1 = xQueueCreate(preemptQUEUE_LENGTH, sizeof(pdMS_TO_TICKS(1)));
+	xQueue_preempt_2 = xQueueCreate(preemptQUEUE_LENGTH, sizeof(pdMS_TO_TICKS(1)));
+	xQueue_preempt_3 = xQueueCreate(preemptQUEUE_LENGTH, sizeof(pdMS_TO_TICKS(1)));
 	/* Add to the registry, for the benefit of kernel aware debugging. */
 	vQueueAddToRegistry(xQueue_released, "released queue");
 	vQueueAddToRegistry(xQueue_completed, "completed tasks");
 	vQueueAddToRegistry(xQueue_command, "command messages");
 	vQueueAddToRegistry(xQueue_task_lists, "task list structs");
+	vQueueAddToRegistry(xQueue_preempt_1, "Preempt Q 1");
+	vQueueAddToRegistry(xQueue_preempt_2, "Preempt Q 2");
+	vQueueAddToRegistry(xQueue_preempt_3, "Preempt Q 3");
 
 	//Task generators
 	xTimerOne = xTimerCreate("Create Task One", 10, pdTRUE, 0, Create_Task_One);
 	xTimerTwo = xTimerCreate("Create Task Two", 10, pdTRUE, 0, Create_Task_Two);
 	xTimerThree = xTimerCreate("Create Task Three", 10, pdTRUE, 0, Create_Task_Three);
+	xTimerMonitor = xTimerCreate("Monitor task", 1000, pdTRUE, 0, Adjust_monitor_prio);
+
 
 	//Task scheduler: uses vTaskDelay to block the task to allow dd tasks to run
 	xTaskCreate(Scheduling_Task, "Scheduler DD Task", configMINIMAL_STACK_SIZE, NULL, scheduler_priority, NULL);
 
 	//Task monitor: this has the same priority as scheduler and uses vTaskDelay to block the task to allow dd tasks to run
-	xTaskCreate(Monitor_Task, "Monitor DD Task ", configMINIMAL_STACK_SIZE, NULL, scheduler_priority, NULL);
+	xTaskCreate(Monitor_Task, "Monitor DD Task ", configMINIMAL_STACK_SIZE, NULL, default_priority, &xTaskMonitor);
 
 	//Default tasks
 	xTaskCreate(Idle_Task, "Idle Task", configMINIMAL_STACK_SIZE, NULL, idle_task_priority, &xTaskIdleHandle);
@@ -315,6 +325,12 @@ int main(void)
 		printf("Timer failed to start because queue already full. \n");
 		return -1;
 	}
+
+	if (xTimerStart(xTimerMonitor, 0) == pdFALSE) {
+		printf("Timer failed to start because queue already full. \n");
+		return -1;
+	}
+
 	vTaskStartScheduler();
 
 	return 0;
@@ -337,25 +353,43 @@ static void Idle_Task(void *pvParameters) {
 }
 
 static void Monitor_Task(void *pvParameters) {
+	int iter = 0;
+	int num_completed = 0;
+	int num_overdue = 0;
 	msg_type cmd = MONITOR;
 	while (1) {
-		vTaskDelay(pdMS_TO_TICKS(2000));
-		if (xQueueSend(xQueue_command, &cmd, pdMS_TO_TICKS(500)) == pdFALSE) {
-			// Failed to send enum to command queue
-			printf("Failed to send monitor cmd to command queue\n");
-			vTaskDelay(pdMS_TO_TICKS(2000));
-			continue;
+
+		uint32_t time = xTaskGetTickCount();
+		uint32_t preempt = 0;
+		if(xQueueReceive(xQueue_preempt_1, &preempt, 0) == pdFALSE){
+			xQueueSend(xQueue_preempt_1, &time, 0);
+		}else{
+			xQueueSend(xQueue_preempt_1, &preempt, 0);
 		}
+
+		if(xQueueReceive(xQueue_preempt_2, &preempt, 0) == pdFALSE){
+			xQueueSend(xQueue_preempt_2, &time, 0);
+		}else{
+			xQueueSend(xQueue_preempt_2, &preempt, 0);
+		}
+
+		if(xQueueReceive(xQueue_preempt_3, &preempt, 0) == pdFALSE){
+			xQueueSend(xQueue_preempt_3, &time, 0);
+		}else{
+			xQueueSend(xQueue_preempt_3, &preempt, 0);
+		}
+
 		printf("\nPrint active dd tasks: \n");
 		dd_task_list * active_list = NULL;
-		vTaskDelay(100);
-		get_active_dd_task_list(active_list);
+		get_active_dd_task_list(&active_list);
 		if (active_list != NULL) {
 
-			while (active_list->next_task != NULL) {
-				dd_task curr_task = active_list->task;
+			dd_task_list * current_node;
+			current_node = active_list;
+			while (current_node != NULL) {
+				dd_task curr_task = current_node->task;
 				printf("%d{r: %d, d: %d, c: %d}\n", curr_task.task_id, curr_task.release_time, curr_task.absolute_deadline, curr_task.completion_time);
-				active_list = active_list->next_task;
+				current_node = current_node->next_task;
 			}
 
 		}else{
@@ -366,13 +400,16 @@ static void Monitor_Task(void *pvParameters) {
 
 		printf("\nPrint completed dd tasks: \n");
 		dd_task_list * completed_list = NULL;
-		get_complete_dd_task_list(completed_list);
+		get_complete_dd_task_list(&completed_list);
 		if (completed_list != NULL) {
 
-			while (completed_list->next_task != NULL) {
-				dd_task curr_task = completed_list->task;
+			dd_task_list * current_node;
+			current_node = completed_list;
+			while (current_node != NULL) {
+				num_completed++;
+				dd_task curr_task = current_node->task;
 				printf("%d{r: %d, d: %d, c: %d}\n", curr_task.task_id, curr_task.release_time, curr_task.absolute_deadline, curr_task.completion_time);
-				completed_list = completed_list->next_task;
+				current_node = current_node->next_task;
 			}
 
 		}else{
@@ -382,13 +419,16 @@ static void Monitor_Task(void *pvParameters) {
 
 		printf("\nPrint overdue dd tasks: \n");
 		dd_task_list * overdue_list = NULL;
-		get_overdue_dd_task_list(overdue_list);
+		get_overdue_dd_task_list(&overdue_list);
 		if (overdue_list != NULL) {
 
-			while (overdue_list->next_task != NULL) {
-				dd_task curr_task = overdue_list->task;
+			dd_task_list * current_node;
+			current_node = overdue_list;
+			while (current_node != NULL) {
+				num_overdue++;
+				dd_task curr_task = current_node->task;
 				printf("%d{r: %d, d: %d, c: %d}\n", curr_task.task_id, curr_task.release_time, curr_task.absolute_deadline, curr_task.completion_time);
-				overdue_list = overdue_list->next_task;
+				current_node = current_node->next_task;
 			}
 
 		}else{
@@ -396,7 +436,11 @@ static void Monitor_Task(void *pvParameters) {
 			printf("xQueue_task_list empty\n");
 		}
 
-		vTaskDelay(1000);
+		printf("Iteration %d \n# Completed %d \n# Overdue %d", ++iter, num_completed, num_overdue);
+		num_overdue = 0;
+		num_completed = 0;
+
+		vTaskPrioritySet(xTaskMonitor, default_priority);
 	}
 }
 
@@ -407,21 +451,49 @@ static void Scheduling_Task(void *pvParameters) {
 
 	while (1) {
 		msg_type cmd_message;
-
 		//if no command message received we don't need to do anything
-		if (xQueueReceive(xQueue_command, &cmd_message, pdMS_TO_TICKS(500)) == pdFALSE) {
-			// TODO set it to lowest period out of all tasks so tasks can be scheduled before regenerating again
-			vTaskDelay(500);
+		if (xQueueReceive(xQueue_command, &cmd_message, pdMS_TO_TICKS(100)) == pdFALSE) {
 			continue;
 		}
 
+
+
+		uint32_t p_time = xTaskGetTickCount();
+		uint32_t preempt = 0;
+		if(xQueueReceive(xQueue_preempt_1, &preempt, 0) == pdFALSE){
+			xQueueSend(xQueue_preempt_1, &p_time, 0);
+		}else{
+			xQueueSend(xQueue_preempt_1, &preempt, 0);
+		}
+
+		if(xQueueReceive(xQueue_preempt_2, &preempt, 0) == pdFALSE){
+			xQueueSend(xQueue_preempt_2, &p_time, 0);
+		}else{
+			xQueueSend(xQueue_preempt_2, &preempt, 0);
+		}
+
+		if(xQueueReceive(xQueue_preempt_3, &preempt, 0) == pdFALSE){
+			xQueueSend(xQueue_preempt_3, &p_time, 0);
+		}else{
+			xQueueSend(xQueue_preempt_3, &preempt, 0);
+		}
+
 		uint32_t time = xTaskGetTickCount();
+
 		switch (cmd_message) {
 			case RELEASED:
 			{
 				//release task
 				dd_task released_task;
-				if (xQueueReceive(xQueue_released, &released_task, pdMS_TO_TICKS(500))) {
+				if (xQueueReceive(xQueue_released, &released_task, 0)) {
+					// Clear preempt queue for released task
+					if(released_task.task_id == 1){
+						xQueueReceive(xQueue_preempt_1, &preempt, 0);
+					}else if(released_task.task_id == 2){
+						xQueueReceive(xQueue_preempt_2, &preempt, 0);
+					}else if(released_task.task_id == 3){
+						xQueueReceive(xQueue_preempt_3, &preempt, 0);
+					}
 
 					//if no tasks set to released task
 					if (active_list == NULL) {
@@ -485,7 +557,16 @@ static void Scheduling_Task(void *pvParameters) {
 			{
 				//completed tasks
 				uint32_t completed_task_id;
-				if (xQueueReceive(xQueue_completed, &completed_task_id, pdMS_TO_TICKS(500))) {
+				if (xQueueReceive(xQueue_completed, &completed_task_id, 0)) {
+					// Clear preempt queue for completed task
+					if(completed_task_id == 1){
+						xQueueReceive(xQueue_preempt_1, &preempt, 0);
+					}else if(completed_task_id == 2){
+						xQueueReceive(xQueue_preempt_2, &preempt, 0);
+					}else if(completed_task_id == 3){
+						xQueueReceive(xQueue_preempt_3, &preempt, 0);
+					}
+
 					dd_task_list * current_task = active_list;
 
 					if (active_list == NULL) {
@@ -496,6 +577,10 @@ static void Scheduling_Task(void *pvParameters) {
 					dd_task_list * prev = NULL;
 
 					while (1) {
+						if(current_task == NULL){
+							// completed task is not found
+							break;
+						}
 
 						//loop through task list until completed found
 						if (current_task->task.task_id == completed_task_id) {
@@ -557,10 +642,8 @@ static void Scheduling_Task(void *pvParameters) {
 					printf("Failed to send overdue lists\n");
 					break;
 				}
-				// TODO: need to re enter monitor task to read the stuff
-				// should we add a priority for monitor task?
-				vTaskDelay(1000);
-				continue;
+				vTaskPrioritySet(xTaskMonitor, scheduler_priority);
+				break;
 			}
 			default:
 				break;
@@ -568,32 +651,47 @@ static void Scheduling_Task(void *pvParameters) {
 
 		// Run overdue checking at the end of every command
 
-		dd_task task_to_overdue;
 
 		// Check if head of active list is overdue
 		if (active_list->task.absolute_deadline < time) {
-			task_to_overdue = active_list->task;
-			vTaskPrioritySet(task_to_overdue.t_handle, default_priority);
+
+			dd_task_list * overdue_node = active_list;
+
+			vTaskPrioritySet(active_list->task.t_handle, default_priority);
 
 			// Remove head from active list
 			active_list = active_list->next_task;
-			active_list->task.release_time = time;
-			vTaskPrioritySet(active_list->task.t_handle, running_priority);
 
-			dd_task_list overdue_node = { task_to_overdue, NULL };
+			overdue_node->next_task = NULL;
+
+			if(active_list != NULL){
+				active_list->task.release_time = time;
+				vTaskPrioritySet(active_list->task.t_handle, running_priority);
+			}
 
 			if (overdue_list == NULL) {
-				overdue_list = &overdue_node;
+				overdue_list = overdue_node;
 			}
 			else {
 				dd_task_list * current_task = overdue_list;
 				while (1) {
 					if (current_task->next_task == NULL) {
-						current_task->next_task = &overdue_node;
+						current_task->next_task = overdue_node;
 						break;
 					}
 					current_task = current_task->next_task;
 				}
+			}
+
+			dd_task task_to_overdue = overdue_node->task;
+
+			// Clear preempt queue for overdue task
+			if(task_to_overdue.task_id == 1){
+				xQueueReceive(xQueue_preempt_1, &preempt, 0);
+			}else if(task_to_overdue.task_id == 2){
+				xQueueReceive(xQueue_preempt_2, &preempt, 0);
+			}else if(task_to_overdue.task_id == 3){
+				xQueueReceive(xQueue_preempt_3, &preempt, 0);
 			}
 		}
 	}
@@ -629,6 +727,15 @@ static void Create_Task_Three(TimerHandle_t xTimer)
 	xTimerChangePeriod(xTimer, pdMS_TO_TICKS(task_3_Period), pdMS_TO_TICKS(10));
 }
 
+static void Adjust_monitor_prio(TimerHandle_t xTimer)
+{
+	msg_type cmd = MONITOR;
+	if(xQueueSend(xQueue_command, &cmd, pdMS_TO_TICKS(500)) == pdFALSE) {
+		// Failed to send enum to command queue
+		printf("Failed to send monitor cmd to command queue\n");
+	}
+}
+
 /*-----------------------------------------------------------*/
 
 /*	@brief	User defined tasks
@@ -642,8 +749,19 @@ static void Create_Task_Three(TimerHandle_t xTimer)
 static void First_Task(void *pvParameters)
 {
 	while (1) {
+		uint32_t preempt_start = 0;
+		uint32_t total_preempt_time = 0;
 		int start = xTaskGetTickCount();
-		while (xTaskGetTickCount() != pdMS_TO_TICKS(task_1_Execution) + start) {}
+
+		if(xQueueReceive(xQueue_preempt_1, &preempt_start, 0) == pdTRUE){}
+		preempt_start = 0;
+		int temp = pdMS_TO_TICKS(task_1_Execution) + start + total_preempt_time;
+		while (xTaskGetTickCount() != pdMS_TO_TICKS(task_1_Execution) + start + total_preempt_time) {
+			if(xQueueReceive(xQueue_preempt_1, &preempt_start, 0) == pdTRUE){
+				total_preempt_time += (xTaskGetTickCount() - preempt_start);
+				continue;
+			}
+		}
 		delete_dd_task(1);
 	}
 }
@@ -651,8 +769,19 @@ static void First_Task(void *pvParameters)
 static void Second_Task(void *pvParameters)
 {
 	while (1) {
+		uint32_t preempt_start = 0;
+		uint32_t total_preempt_time = 0;
 		int start = xTaskGetTickCount();
-		while (xTaskGetTickCount() != pdMS_TO_TICKS(task_2_Execution) + start) {}
+
+		if(xQueueReceive(xQueue_preempt_2, &preempt_start, 0) == pdTRUE){}
+		preempt_start = 0;
+
+		while (xTaskGetTickCount() != pdMS_TO_TICKS(task_2_Execution) + start + total_preempt_time) {
+			if(xQueueReceive(xQueue_preempt_2, &preempt_start, 0) == pdTRUE){
+				total_preempt_time += (xTaskGetTickCount() - preempt_start);
+				continue;
+			}
+		}
 		delete_dd_task(2);
 	}
 }
@@ -660,8 +789,19 @@ static void Second_Task(void *pvParameters)
 static void Third_Task(void *pvParameters)
 {
 	while (1) {
+		uint32_t preempt_start = 0;
+		uint32_t total_preempt_time = 0;
 		int start = xTaskGetTickCount();
-		while (xTaskGetTickCount() != pdMS_TO_TICKS(task_3_Execution) + start) {}
+
+		if(xQueueReceive(xQueue_preempt_3, &preempt_start, 0) == pdTRUE){}
+		preempt_start = 0;
+
+		while (xTaskGetTickCount() != pdMS_TO_TICKS(task_3_Execution) + start + total_preempt_time) {
+			if(xQueueReceive(xQueue_preempt_3, &preempt_start, 0) == pdTRUE){
+				total_preempt_time += (xTaskGetTickCount() - preempt_start);
+				continue;
+			}
+		}
 		delete_dd_task(3);
 	}
 }
