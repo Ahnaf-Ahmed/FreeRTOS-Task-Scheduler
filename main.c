@@ -514,7 +514,10 @@ static void Scheduling_Task(void *pvParameters) {
 				break;
 			}
 			default:
-				break;
+			{
+				printf("Unrecongized msg_type\n");
+				continue;
+			}
 		}
 
 		// Run overdue checking at the end of every command
